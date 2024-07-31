@@ -1,4 +1,3 @@
 package com.example.ble_scanner
 
-class ItemsViewModel {
-}
+data class ItemsViewModel(val name: String, val address: String, val rssi: Int)

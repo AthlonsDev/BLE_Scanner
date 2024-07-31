@@ -10,16 +10,21 @@ import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.util.Log
+import android.view.LayoutInflater
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat.getSystemService
+import androidx.recyclerview.widget.LinearLayoutManager
+
 import com.example.ble_scanner.Constants.REQUEST_ENABLE_BT
 import com.example.ble_scanner.databinding.ActivityMainBinding
 
@@ -43,19 +48,23 @@ private val handler = Handler()
 class MainActivity : AppCompatActivity() {
 
 
-
+    var data = ArrayList<ItemsViewModel>()
+    var adapter: DeviceListAdapter? = null
+    var bleGatt: BluetoothGatt? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val scanButton = binding.scanButton
+
+
         val textView = binding.textView
+        val listView = binding.deviceListView
 
+        listView.layoutManager = LinearLayoutManager(this@MainActivity)
+        adapter = DeviceListAdapter(data)
+        listView.adapter = adapter
 
-        scanButton.setOnClickListener {
-            scanLeDevice(true)
-        }
 
         val bluetoothManager: BluetoothManager = getSystemService(BluetoothManager::class.java)
         val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
@@ -93,11 +102,31 @@ class MainActivity : AppCompatActivity() {
             }
             startActivityForResult(enableBtIntent, Constants.REQUEST_ENABLE_BT)
         } else {
-            Toast.makeText(this, "Bluetooth is already enabled", Toast.LENGTH_SHORT).show()
+//            Toast.makeText(this, "Bluetooth is already enabled", Toast.LENGTH_SHORT).show()
         }
 
         requestBluetooth()
 
+        adapter!!.setOnClickListener {
+            val position = listView.getChildAdapterPosition(it)
+            val device = data[position]
+            val deviceAddress = device.address
+            val deviceName = device.name
+            val deviceRssi = device.rssi
+            Toast.makeText(
+                this,
+                "Device Name: $deviceName\nDevice Address: $deviceAddress\nDevice RSSI: $deviceRssi",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+    }
+
+    private fun deviceList(deviceName: String, deviceAddress: String, rssi: Int) {
+
+        for (i in 0 until 10) {
+            data.add(ItemsViewModel(deviceName, deviceAddress, rssi))
+        }
     }
 
     // Stops scanning after 10 seconds.
@@ -187,7 +216,17 @@ class MainActivity : AppCompatActivity() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             super.onScanResult(callbackType, result)
             Log.d("ScanCallback", "onScanResult")
-            Toast.makeText(this@MainActivity, "Device found", Toast.LENGTH_SHORT).show()
+            val device: BluetoothDevice = result.device
+            val deviceName = device.name
+            val deviceAddress = device.address
+            val rssi = result.rssi
+
+            if (deviceName != null && deviceAddress != null && rssi != null) {
+                data.add(ItemsViewModel(deviceName, deviceAddress, rssi))
+                adapter?.notifyDataSetChanged()
+            }
+
+//            Toast.makeText(this@MainActivity, "Device found: $deviceName", Toast.LENGTH_SHORT).show()
             if (ActivityCompat.checkSelfPermission(
                     this@MainActivity,
                     Manifest.permission.BLUETOOTH_CONNECT
@@ -197,15 +236,17 @@ class MainActivity : AppCompatActivity() {
 
                 return
             }
-            val device: BluetoothDevice = result.device
-            Toast.makeText(this@MainActivity, "Device: ${device.name}", Toast.LENGTH_SHORT).show()
+
         }
 
         override fun onScanFailed(errorCode: Int) {
             super.onScanFailed(errorCode)
             Toast.makeText(this@MainActivity, "Scan failed", Toast.LENGTH_SHORT).show()
         }
+
     }
+
+
 
 
 }

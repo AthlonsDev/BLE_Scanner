@@ -11,11 +11,17 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothProfile
+import android.content.ComponentName
+import android.content.ContentValues.TAG
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -51,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     var data = ArrayList<ItemsViewModel>()
     var adapter: DeviceListAdapter? = null
     var bleGatt: BluetoothGatt? = null
+    var bluetoothService: BluetoothLeService? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -64,6 +71,10 @@ class MainActivity : AppCompatActivity() {
         listView.layoutManager = LinearLayoutManager(this@MainActivity)
         adapter = DeviceListAdapter(data)
         listView.adapter = adapter
+
+//        for (i in 0 until 10) {
+//            data.add(ItemsViewModel("Device Name: $i", "Device Address", 0))
+//        }
 
 
         val bluetoothManager: BluetoothManager = getSystemService(BluetoothManager::class.java)
@@ -107,30 +118,61 @@ class MainActivity : AppCompatActivity() {
 
         requestBluetooth()
 
-        adapter!!.setOnClickListener {
-            val position = listView.getChildAdapterPosition(it)
-            val device = data[position]
-            val deviceAddress = device.address
-            val deviceName = device.name
-            val deviceRssi = device.rssi
-            Toast.makeText(
-                this,
-                "Device Name: $deviceName\nDevice Address: $deviceAddress\nDevice RSSI: $deviceRssi",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
+        adapter?.setOnClickListener(object : DeviceListAdapter.OnClickListener {
+            override fun onClick(position: Int, model: ItemsViewModel) {
+//                Toast.makeText(this@MainActivity, "Clicked on $position, device: ${model.name}", Toast.LENGTH_SHORT).show()
+                val device = bluetoothAdapter?.getRemoteDevice(model.address)
+                if (device != null) {
+                    connect(model.address)
+                }
+            }
+        })
 
-    }
-
-    private fun deviceList(deviceName: String, deviceAddress: String, rssi: Int) {
-
-        for (i in 0 until 10) {
-            data.add(ItemsViewModel(deviceName, deviceAddress, rssi))
-        }
     }
 
     // Stops scanning after 10 seconds.
     private val SCAN_PERIOD: Long = 10000
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                // successfully connected to the GATT Server
+                Toast.makeText(this@MainActivity, "Connected to GATT Server", Toast.LENGTH_SHORT).show()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                // disconnected from the GATT Server
+                Toast.makeText(this@MainActivity, "Disconnected from GATT Server", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+//    connect to device
+    fun connect(address: String): Boolean {
+        bluetoothAdapter?.let { adapter ->
+            try {
+                val device = adapter.getRemoteDevice(address)
+                if (ActivityCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    return false
+                }
+                bleGatt = device.connectGatt(this, false, gattCallback)
+                Toast.makeText(this, "Connected to: ${device.name}", Toast.LENGTH_SHORT).show()
+                return true
+            } catch (exception: IllegalArgumentException) {
+                Log.w(TAG, "Device not found with provided address.")
+                return false
+            }
+        // connect to the GATT server on the device
+
+        } ?: run {
+            Log.w(TAG, "BluetoothAdapter not initialized")
+            return false
+        }
+        Log.d("Bluetooth", "Connecting to device")
+        return true
+    }
+
 
     private fun scanLeDevice(enable: Boolean) {
         if (enable) {
@@ -246,7 +288,35 @@ class MainActivity : AppCompatActivity() {
 
     }
 
+    private val serviceConnection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(
+            componentName: ComponentName,
+            service: IBinder
+        ) {
+            bluetoothService = (service as BluetoothLeService.LocalBinder).getService()
+            bluetoothService?.let { bluetooth ->
+                if (!bluetooth.initialize()) {
+                    Log.e(TAG, "Unable to initialize Bluetooth")
+                    finish()
+                }
+                // perform device connection
 
+            }
+        }
 
+        override fun onServiceDisconnected(componentName: ComponentName) {
+            bluetoothService = null
+        }
+    }
+
+    private val bluetoothGattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                // successfully connected to the GATT Server
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                // disconnected from the GATT Server
+            }
+        }
+    }
 
 }

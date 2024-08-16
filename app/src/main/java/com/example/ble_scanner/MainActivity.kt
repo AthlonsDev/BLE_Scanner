@@ -1,38 +1,42 @@
 package com.example.ble_scanner
 
 import android.Manifest
-import androidx.appcompat.app.AppCompatActivity
-import android.os.Bundle
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothSocket
+import android.bluetooth.BluetoothAdapter.STATE_CONNECTED
+import android.bluetooth.BluetoothAdapter.STATE_DISCONNECTED
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.ContentValues.TAG
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.util.Log
-import android.view.LayoutInflater
-import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat.getSystemService
 import androidx.recyclerview.widget.LinearLayoutManager
-
+import com.example.ble_scanner.BluetoothLeService.Companion.ACTION_GATT_CONNECTED
+import com.example.ble_scanner.BluetoothLeService.Companion.ACTION_GATT_DISCONNECTED
+import com.example.ble_scanner.BluetoothLeService.Companion.ACTION_GATT_SERVICES_DISCOVERED
 import com.example.ble_scanner.Constants.REQUEST_ENABLE_BT
 import com.example.ble_scanner.databinding.ActivityMainBinding
+
 
 object Constants {
     const val REQUEST_CODE_BLUETOOTH_CONNECT = 1
@@ -58,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     var adapter: DeviceListAdapter? = null
     var bleGatt: BluetoothGatt? = null
     var bluetoothService: BluetoothLeService? = null
+    var connected = false
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -71,11 +76,6 @@ class MainActivity : AppCompatActivity() {
         listView.layoutManager = LinearLayoutManager(this@MainActivity)
         adapter = DeviceListAdapter(data)
         listView.adapter = adapter
-
-//        for (i in 0 until 10) {
-//            data.add(ItemsViewModel("Device Name: $i", "Device Address", 0))
-//        }
-
 
         val bluetoothManager: BluetoothManager = getSystemService(BluetoothManager::class.java)
         val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
@@ -123,54 +123,153 @@ class MainActivity : AppCompatActivity() {
 //                Toast.makeText(this@MainActivity, "Clicked on $position, device: ${model.name}", Toast.LENGTH_SHORT).show()
                 val device = bluetoothAdapter?.getRemoteDevice(model.address)
                 if (device != null) {
-                    connect(model.address)
+
+                    if (connect(model.address)) {
+                        Toast.makeText(this@MainActivity, "Connected to device: ${model.name}", Toast.LENGTH_SHORT).show()
+//                        discover gatt services
+                        gattDiscoverServices()
+                    } else {
+                        Toast.makeText(this@MainActivity, "Failed to connect to device: ${model.name}", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         })
 
     }
-
+    var connectionState = STATE_CONNECTED
     // Stops scanning after 10 seconds.
     private val SCAN_PERIOD: Long = 10000
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 // successfully connected to the GATT Server
-                Toast.makeText(this@MainActivity, "Connected to GATT Server", Toast.LENGTH_SHORT).show()
+//                broadcastUpdate(ACTION_GATT_CONNECTED)
+
+                // Attempts to discover services after successful connection.
+                if (ActivityCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    // TODO: Consider calling
+                    //    ActivityCompat#requestPermissions
+                    // here to request the missing permissions, and then overriding
+                    //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                    //                                          int[] grantResults)
+                    // to handle the case where the user grants the permission. See the documentation
+                    // for ActivityCompat#requestPermissions for more details.
+                    return
+                }
+                bleGatt?.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 // disconnected from the GATT Server
-                Toast.makeText(this@MainActivity, "Disconnected from GATT Server", Toast.LENGTH_SHORT).show()
+//                broadcastUpdate(ACTION_GATT_DISCONNECTED)
+                connectionState = STATE_DISCONNECTED
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+//                broadcastUpdate(ACTION_GATT_SERVICES_DISCOVERED)
+                displayGattServices(gatt?.services)
+            } else {
+//                Log.w(BluetoothLeService.TAG, "onServicesDiscovered received: $status")
             }
         }
     }
 
+    private fun gattDiscoverServices() {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // TODO: Consider calling
+            //    ActivityCompat#requestPermissions
+            // here to request the missing permissions, and then overriding
+            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            //                                          int[] grantResults)
+            // to handle the case where the user grants the permission. See the documentation
+            // for ActivityCompat#requestPermissions for more details.
+            return
+        }
+        bleGatt?.discoverServices()
+//        if (bleGatt?.services?.size == 0) {
+//            Toast.makeText(this, "GATT Services: ${bleGatt?.services}", Toast.LENGTH_SHORT).show()
+//            return
+//        }
+        displayGattServices(bleGatt?.services)
+
+    }
+
+    var deviceAddress = ""
 //    connect to device
     fun connect(address: String): Boolean {
         bluetoothAdapter?.let { adapter ->
             try {
+                deviceAddress = address
                 val device = adapter.getRemoteDevice(address)
-                if (ActivityCompat.checkSelfPermission(
-                        this,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    return false
-                }
-                bleGatt = device.connectGatt(this, false, gattCallback)
-                Toast.makeText(this, "Connected to: ${device.name}", Toast.LENGTH_SHORT).show()
-                return true
-            } catch (exception: IllegalArgumentException) {
+            }
+            catch (exception: IllegalArgumentException) {
                 Log.w(TAG, "Device not found with provided address.")
                 return false
             }
         // connect to the GATT server on the device
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
 
+        }
+        bleGatt = adapter.getRemoteDevice(address).connectGatt(this, false, gattCallback)
+        return true
         } ?: run {
             Log.w(TAG, "BluetoothAdapter not initialized")
             return false
         }
-        Log.d("Bluetooth", "Connecting to device")
         return true
+    }
+
+    // Code to manage Service lifecycle.
+    private val serviceConnection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(
+            componentName: ComponentName,
+            service: IBinder
+        ) {
+            bluetoothService = (service as BluetoothLeService.LocalBinder).getService()
+            bluetoothService?.let { bluetooth ->
+                if (!bluetooth.initialize()) {
+                    Log.e(TAG, "Unable to initialize Bluetooth")
+                    finish()
+                }
+                // perform device connection
+                bluetooth.connect(deviceAddress)
+            }
+        }
+
+        override fun onServiceDisconnected(componentName: ComponentName) {
+            bluetoothService = null
+        }
+    }
+
+    private fun sendCommand(characteristic: BluetoothGattCharacteristic, command: String) {
+        characteristic.setValue(command)
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // TODO: Consider calling
+            //    ActivityCompat#requestPermissions
+            // here to request the missing permissions, and then overriding
+            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            //                                          int[] grantResults)
+            // to handle the case where the user grants the permission. See the documentation
+            // for ActivityCompat#requestPermissions for more details.
+            return
+        }
+        bleGatt?.writeCharacteristic(characteristic)
     }
 
 
@@ -227,7 +326,10 @@ class MainActivity : AppCompatActivity() {
                     Manifest.permission.BLUETOOTH_SCAN,
                     Manifest.permission.BLUETOOTH_ADVERTISE,
                     Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.ACCESS_FINE_LOCATION
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.BLUETOOTH_PRIVILEGED,
+                    Manifest.permission.BLUETOOTH
+
                 )
             )
         } else {
@@ -288,35 +390,120 @@ class MainActivity : AppCompatActivity() {
 
     }
 
-    private val serviceConnection: ServiceConnection = object : ServiceConnection {
-        override fun onServiceConnected(
-            componentName: ComponentName,
-            service: IBinder
-        ) {
-            bluetoothService = (service as BluetoothLeService.LocalBinder).getService()
-            bluetoothService?.let { bluetooth ->
-                if (!bluetooth.initialize()) {
-                    Log.e(TAG, "Unable to initialize Bluetooth")
-                    finish()
+
+    private val gattUpdateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                BluetoothLeService.ACTION_GATT_CONNECTED -> {
+                    connected = true
+//                    updateConnectionState(R.string.connected)
                 }
-                // perform device connection
-
-            }
-        }
-
-        override fun onServiceDisconnected(componentName: ComponentName) {
-            bluetoothService = null
-        }
-    }
-
-    private val bluetoothGattCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                // successfully connected to the GATT Server
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                // disconnected from the GATT Server
+                BluetoothLeService.ACTION_GATT_DISCONNECTED -> {
+                    connected = false
+//                    updateConnectionState(R.string.disconnected)
+                }
+                BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED -> {
+                    // Show all the supported services and characteristics on the user interface.
+                    displayGattServices(bluetoothService?.getSupportedGattServices() as List<BluetoothGattService>?)
+                }
             }
         }
     }
+
+    private fun makeGattUpdateIntentFilter(): IntentFilter? {
+        return IntentFilter().apply {
+            addAction(BluetoothLeService.ACTION_GATT_CONNECTED)
+            addAction(BluetoothLeService.ACTION_GATT_DISCONNECTED)
+        }
+    }
+
+
+
+
+
+
+
+
+    var mGattCharacteristics: MutableList<BluetoothGattCharacteristic> = mutableListOf()
+    private fun displayGattServices(gattServices: List<BluetoothGattService>?) {
+        if (gattServices == null) return
+        var uuid: String = ""
+        var unknownServiceString = "Unknown Service"
+        var unknownCharaString = "Unknown Characteristic"
+        val gattServiceData: ArrayList<HashMap<String, String>> = arrayListOf()
+        val gattCharacteristicData: ArrayList<ArrayList<HashMap<String, String>>> = arrayListOf()
+
+
+        // Loops through available GATT Services.
+        gattServices.forEach { gattService ->
+            val currentServiceData = HashMap<String, String>()
+            uuid = gattService.uuid.toString()
+//            currentServiceData[LIST_NAME] = SampleGattAttributes.lookup(uuid, unknownServiceString)
+//            currentServiceData[LIST_UUID] = uuid
+            gattServiceData += currentServiceData
+
+            val gattCharacteristicGroupData: ArrayList<HashMap<String, String>> = arrayListOf()
+            val gattCharacteristics = gattService.characteristics
+            val charas: MutableList<BluetoothGattCharacteristic> = mutableListOf()
+
+            // Loops through available Characteristics.
+            gattCharacteristics.forEach { gattCharacteristic ->
+                charas += gattCharacteristic
+                val currentCharaData: HashMap<String, String> = hashMapOf()
+                uuid = gattCharacteristic.uuid.toString()
+//                currentCharaData[LIST_NAME] = SampleGattAttributes.lookup(uuid, unknownCharaString)
+//                currentCharaData[LIST_UUID] = uuid
+                gattCharacteristicGroupData += currentCharaData
+            }
+
+            mGattCharacteristics += charas
+            gattCharacteristicData += gattCharacteristicGroupData
+//            write characteristic
+            if (charas.isNotEmpty()) {
+                val charas = charas.filter { it.properties and BluetoothGattCharacteristic.PROPERTY_WRITE > 0 }
+                if (charas.isNotEmpty()) {
+                    sendCommand(charas[0], "Hello")
+                }
+            }
+        }
+    }
+
+
+
+    private val bluetoothGattCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            // Handle connection state changes here
+
+        }
+
+        override fun onCharacteristicRead(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            // Handle characteristic reads here
+        }
+
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            // Handle characteristic writes here
+
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            // Handle characteristic changes here
+        }
+
+    }
+
+
+
+
 
 }
